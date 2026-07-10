@@ -3,11 +3,11 @@
 [![Language: Python](https://img.shields.io/badge/Language-Python-blue.svg)](https://www.python.org/)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)]()
 
-*Read this in other languages: [Italiano](#-versione-italiana) | [English](#-english-version)*
+*Read this in other languages: [Italiano](#it-versione-italiana) | [English](#en-english-version)*
 
 ---
 
-## 🇮🇹 Versione Italiana
+## IT Versione Italiana
 
 Uno strumento automatizzato in Python per sincronizzare le mod (mappe) del Workshop di Steam direttamente nella cartella di gioco di **Meccha Chameleon**, configurandole automaticamente per funzionare con OnlineFix.
 
