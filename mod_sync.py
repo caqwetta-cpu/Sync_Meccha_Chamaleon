@@ -7,38 +7,54 @@ import tkinter as tk
 from tkinter import filedialog
 import winreg
 
+# --- COSTANTI GLOBALI ---
+# Nome del file in cui verranno salvati i percorsi per non doverli cercare ogni volta
 CONFIG_FILE = "mod_sync_settings.json"
+# L'ID del gioco su Steam (usato per trovare la cartella del Workshop)
 APP_ID = "4704690"
+# Il nome della cartella principale del gioco
 GAME_FOLDER_NAME = "MECCHA CHAMELEON"
 
 def get_mod_name_from_steam(mod_id):
-    """Fetches the mod name directly from the Steam Workshop web page."""
+    """
+    Recupera il nome della mod direttamente dalla pagina web del Workshop di Steam.
+    Effettua una richiesta HTTP e usa un'espressione regolare (regex) per estrarre il titolo.
+    """
     url = f"https://steamcommunity.com/sharedfiles/filedetails/?id={mod_id}"
     try:
+        # Finge di essere un browser per evitare blocchi da parte di Steam
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req) as response:
             html = response.read().decode('utf-8')
             
+        # Cerca la classe HTML che contiene il titolo della mod
         match = re.search(r'<div class="workshopItemTitle">([^<]+)</div>', html)
         if match:
             return match.group(1).strip()
     except Exception:
+        # Se qualcosa va storto (es. assenza di internet), ignora l'errore
         pass
     return None
 
 def get_steam_library_paths():
-    """Scans Windows registry and Steam config to find all active Steam library paths."""
+    """
+    Scansiona il registro di Windows e i file di configurazione di Steam per trovare 
+    tutti i percorsi in cui sono installati i giochi.
+    """
     libraries = []
     try:
+        # Cerca il percorso principale di Steam nel registro di sistema
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam")
         steam_path, _ = winreg.QueryValueEx(key, "SteamPath")
         steam_path = os.path.abspath(steam_path)
         libraries.append(steam_path)
         
+        # Legge il file libraryfolders.vdf che contiene gli altri dischi/cartelle di libreria
         vdf_path = os.path.join(steam_path, "steamapps", "libraryfolders.vdf")
         if os.path.exists(vdf_path):
             with open(vdf_path, 'r', encoding='utf-8') as f:
                 content = f.read()
+            # Estrae tutti i percorsi delle librerie usando una regex
             matches = re.findall(r'"path"\s+"([^"]+)"', content)
             for match in matches:
                 clean_path = os.path.abspath(match.replace('\\\\', '\\'))
@@ -47,6 +63,7 @@ def get_steam_library_paths():
     except Exception:
         pass
 
+    # Aggiunge i percorsi di default di Windows nel caso in cui il registro fallisca
     defaults = [r"C:\Program Files (x86)\Steam", r"C:\Program Files\Steam"]
     for d in defaults:
         if os.path.exists(d) and os.path.abspath(d) not in libraries:
@@ -55,16 +72,21 @@ def get_steam_library_paths():
     return libraries
 
 def auto_detect_paths():
-    """Attempts to find the exact paths automatically across all detected Steam libraries."""
+    """
+    Tenta di trovare automaticamente le cartelle esatte del Workshop e del gioco 
+    cercando all'interno di tutte le librerie di Steam rilevate.
+    """
     steam_libs = get_steam_library_paths()
     detected_workshop = None
     detected_game = None
 
     for lib in steam_libs:
+        # Controlla se la cartella delle mod per questo gioco esiste in questa libreria
         potential_workshop = os.path.join(lib, "steamapps", "workshop", "content", APP_ID)
         if os.path.exists(potential_workshop):
             detected_workshop = potential_workshop
 
+        # Controlla se la cartella principale del gioco esiste in questa libreria
         potential_game = os.path.join(lib, "steamapps", "common", GAME_FOLDER_NAME)
         if os.path.exists(potential_game):
             detected_game = potential_game
@@ -72,151 +94,188 @@ def auto_detect_paths():
     return detected_workshop, detected_game
 
 def select_folder(title):
-    """Fallback manual selection popup window."""
+    """
+    Apre una finestra di dialogo di Windows per far selezionare manualmente 
+    una cartella all'utente se la rilevazione automatica fallisce.
+    """
     root = tk.Tk()
-    root.attributes("-topmost", True)
-    root.withdraw()
+    root.attributes("-topmost", True) # Mantiene la finestra in primo piano
+    root.withdraw() # Nasconde la finestra principale vuota di tkinter
     return filedialog.askdirectory(title=title)
 
 def get_user_paths():
-    """Manages loading, auto-detecting, or manually selecting paths."""
+    """
+    Gestisce l'ottenimento dei percorsi necessari: 
+    1. Legge dal file di configurazione se esiste.
+    2. Prova l'autorilevamento.
+    3. Chiede manualmente all'utente come ultima risorsa.
+    """
+    # 1. Controlla se abbiamo già salvato le impostazioni in passato
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r') as file:
             settings = json.load(file)
             if os.path.exists(settings.get("steam_workshop", "")) and os.path.exists(settings.get("game_root", "")):
                 return settings
 
-    print("Scanning your system for Steam directories...")
+    print("Scansione del sistema per trovare le cartelle di Steam...")
+    
+    # 2. Tenta la ricerca automatica
     auto_workshop, auto_game = auto_detect_paths()
 
+    # 3. Fallback manuale per la cartella del Workshop
     if not auto_workshop:
-        auto_workshop = select_folder(f"Select the Steam Workshop folder ending in {APP_ID}")
+        auto_workshop = select_folder(f"Seleziona la cartella del Workshop di Steam che finisce per {APP_ID}")
         if not auto_workshop: return None
 
+    # 3. Fallback manuale per la cartella del Gioco
     if not auto_game:
-        auto_game = select_folder(f"Select your main {GAME_FOLDER_NAME} game folder")
+        auto_game = select_folder(f"Seleziona la tua cartella principale del gioco {GAME_FOLDER_NAME}")
         if not auto_game: return None
 
+    # Salva le impostazioni trovate nel file JSON per i futuri avvii
     settings = {"steam_workshop": auto_workshop, "game_root": auto_game}
     with open(CONFIG_FILE, 'w') as file:
         json.dump(settings, file)
         
-    print("Paths successfully established!\n")
+    print("Percorsi stabiliti con successo!\n")
     return settings
 
 def sync_and_patch_mods(steam_workshop_dir, game_root_dir):
+    """
+    Copia le cartelle delle mod da Steam alla cartella del gioco e 
+    aggiorna il file .ini con i dati delle mod copiate.
+    """
+    # Percorsi di destinazione specifici all'interno della cartella del gioco
     game_workshop_dir = os.path.join(game_root_dir, "Chameleon", "Binaries", "Win64", "workshop")
     ini_file_path = os.path.join(game_root_dir, "Chameleon", "Binaries", "Win64", "OnlineFix.ini")
 
+    # Crea la cartella del workshop nel gioco se non esiste già
     os.makedirs(game_workshop_dir, exist_ok=True)
     
     if not os.path.exists(steam_workshop_dir):
-        print(f"Error: Steam Workshop folder does not exist at {steam_workshop_dir}")
+        print(f"Errore: La cartella del Workshop di Steam non esiste in {steam_workshop_dir}")
         return
 
+    # Ottiene la lista di tutte le cartelle (mod) all'interno del Workshop di Steam
     steam_folders = [f for f in os.listdir(steam_workshop_dir) if os.path.isdir(os.path.join(steam_workshop_dir, f))]
     
     mods_processed = 0
 
+    # Cicla attraverso ogni mod trovata
     for folder_id in steam_folders:
         source_path = os.path.join(steam_workshop_dir, folder_id)
         target_path = os.path.join(game_workshop_dir, folder_id)
 
-        print(f"Checking mod ID: {folder_id}...")
+        print(f"Controllo della mod ID: {folder_id}...")
         
+        # Recupera il nome leggibile della mod dal web
         mod_name = get_mod_name_from_steam(folder_id)
         if not mod_name:
-            print("  -> Could not fetch name automatically from Steam.")
-            mod_name = input(f"  -> Enter the Name manually for {folder_id}: ")
+            print("  -> Impossibile recuperare il nome automaticamente da Steam.")
+            mod_name = input(f"  -> Inserisci il nome manualmente per {folder_id}: ")
         else:
-            print(f"  -> Name found online: {mod_name}")
+            print(f"  -> Nome trovato online: {mod_name}")
 
+        # Copia i file se la mod non è già presente nel gioco
         if not os.path.exists(target_path):
-            print("  -> New mod. Copying files to game folder...")
+            print("  -> Nuova mod. Copia dei file nella cartella del gioco...")
             shutil.copytree(source_path, target_path)
         else:
-            print("  -> Files already exist in game folder.")
+            print("  -> I file esistono già nella cartella del gioco.")
 
+        # Aggiunge la mod al file di configurazione per farla riconoscere al gioco
         update_ini_file(ini_file_path, folder_id, mod_name)
         mods_processed += 1
         print("-" * 40)
             
     if mods_processed == 0:
-        print("No workshop folders found to process.")
+        print("Nessuna cartella workshop trovata da processare.")
     else:
-        print("Sync and patch complete!")
+        print("Sincronizzazione e patching completati!")
 
 def update_ini_file(ini_path, folder_id, mod_name):
+    """
+    Modifica il file OnlineFix.ini aggiungendo o aggiornando 
+    la voce relativa alla mod sotto la sezione [UGC].
+    """
     if not os.path.exists(ini_path):
-        print(f"  -> Error: Configuration file not found at {ini_path}")
+        print(f"  -> Errore: File di configurazione non trovato in {ini_path}")
         return
 
+    # Legge tutto il contenuto del file .ini
     with open(ini_path, 'r', encoding='utf-8') as file:
         lines = file.readlines()
 
-    # Find the [UGC] section header
+    # Cerca la riga in cui è presente l'intestazione [UGC]
     ugc_index = -1
     for i, line in enumerate(lines):
         if line.strip() == '[UGC]':
             ugc_index = i
             break
 
+    # La riga da inserire (es: "123456=Nome Mod")
     new_entry = f"{folder_id}={mod_name}\n"
 
-    # Scenario A: [UGC] section exists
+    # Scenario A: La sezione [UGC] esiste già nel file
     if ugc_index != -1:
         existing_index = -1
+        # Cerca all'interno della sezione [UGC] per vedere se l'ID esiste già
         for i in range(ugc_index + 1, len(lines)):
-            if lines[i].strip().startswith('['):
+            if lines[i].strip().startswith('['): # Se inizia un'altra sezione, fermati
                 break
             if lines[i].startswith(f"{folder_id}="):
                 existing_index = i
                 break
 
+        # Se la mod esiste, aggiorna il suo nome, altrimenti inseriscila come nuova voce
         if existing_index != -1:
             lines[existing_index] = new_entry
-            print(f"  -> Updated existing entry in OnlineFix.ini to '{folder_id}={mod_name}'")
+            print(f"  -> Aggiornata voce esistente in OnlineFix.ini in '{folder_id}={mod_name}'")
         else:
             lines.insert(ugc_index + 1, new_entry)
-            print(f"  -> Added new entry '{folder_id}={mod_name}' to OnlineFix.ini")
+            print(f"  -> Aggiunta nuova voce '{folder_id}={mod_name}' in OnlineFix.ini")
 
-    # Scenario B: [UGC] does not exist anywhere in the file
+    # Scenario B: La sezione [UGC] non esiste, deve essere creata
     else:
-        print("  -> [UGC] section not found. Automatically creating section at the end of the file...")
-        # Ensure there's a newline spacing at the end if needed
+        print("  -> Sezione [UGC] non trovata. Creazione automatica della sezione alla fine del file...")
+        # Assicura che ci sia uno spazio/a capo corretto prima di aggiungere nuovo testo
         if lines and not lines[-1].endswith('\n'):
             lines[-1] = lines[-1] + '\n'
         
         lines.append("\n[UGC]\n")
         lines.append(new_entry)
-        print(f"  -> Added section and entry '{folder_id}={mod_name}' to the end of OnlineFix.ini")
+        print(f"  -> Sezione e voce '{folder_id}={mod_name}' aggiunte alla fine di OnlineFix.ini")
 
+    # Scrive le modifiche nel file
     with open(ini_path, 'w', encoding='utf-8') as file:
         file.writelines(lines)
 
+# --- PUNTO DI INIZIO DEL PROGRAMMA ---
 if __name__ == "__main__":
     print("=========================================")
     print("   MECCHA CHAMELEON MOD SYNC UTILITY     ")
     print("=========================================\n")
     
-    # 1. Ask the user if they want to run the tool
-    start_choice = input("Do you want to run the program? (y/n): ").strip().lower()
+    # 1. Chiede all'utente se vuole eseguire il programma
+    start_choice = input("Vuoi avviare il programma? (y/n): ").strip().lower()
     
     if start_choice in ['y', 'yes']:
-        # Load or detect paths
+        # Carica o rileva i percorsi (Workshop e Gioco)
         paths = get_user_paths()
         
         if paths:
-            # 2. Ask the user if they want to initiate the sync
-            sync_choice = input("Do you want to sync the workshop folders now? (y/n): ").strip().lower()
+            # 2. Chiede conferma prima di avviare effettivamente la copia dei file
+            sync_choice = input("Vuoi sincronizzare le cartelle del workshop ora? (y/n): ").strip().lower()
             
             if sync_choice in ['y', 'yes']:
+                # Avvia il processo principale
                 sync_and_patch_mods(paths["steam_workshop"], paths["game_root"])
             else:
-                print("Sync canceled by user.")
+                print("Sincronizzazione annullata dall'utente.")
         else:
-            print("Could not resolve directory paths. Configuration incomplete.")
+            print("Impossibile risolvere i percorsi delle cartelle. Configurazione incompleta.")
     else:
-        print("Program closed.")
+        print("Programma chiuso.")
     
-    input("\nPress Enter to exit...")
+    # Mantiene la finestra della console aperta fino alla pressione di un tasto
+    input("\nPremi Invio per uscire...")
